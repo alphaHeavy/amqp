@@ -214,12 +214,13 @@ data QueueOpts = QueueOpts
                 queuePassive :: Bool, -- ^ (default 'False'); If set, the server will not create the queue.  The client can use this to check whether a queue exists without modifying the server state.                
                 queueDurable :: Bool, -- ^ (default 'True'); If set when creating a new queue, the queue will be marked as durable. Durable queues remain active when a server restarts. Non-durable queues (transient queues) are purged if/when a server restarts. Note that durable queues do not necessarily hold persistent messages, although it does not make sense to send persistent messages to a transient queue.
                 queueExclusive :: Bool, -- ^ (default 'False'); Exclusive queues may only be consumed from by the current connection. Setting the 'exclusive' flag always implies 'auto-delete'.
-                queueAutoDelete :: Bool -- ^ (default 'False'); If set, the queue is deleted when all consumers have finished using it. Last consumer can be cancelled either explicitly or because its channel is closed. If there was no consumer ever on the queue, it won't be deleted.
+                queueAutoDelete :: Bool, -- ^ (default 'False'); If set, the queue is deleted when all consumers have finished using it. Last consumer can be cancelled either explicitly or because its channel is closed. If there was no consumer ever on the queue, it won't be deleted.
+                queueHeaders :: Maybe FieldTable
              }
 
 -- | a 'QueueOpts' with defaults set; you should override at least 'queueName'.
 newQueue :: QueueOpts
-newQueue = QueueOpts "" False True False False
+newQueue = QueueOpts "" False True False False Nothing
 
 -- | creates a new queue on the AMQP server; can be used like this: @declareQueue channel newQueue {queueName = \"myQueue\"}@. 
 --
@@ -236,7 +237,7 @@ declareQueue chan queue = do
             (queueExclusive queue) 
             (queueAutoDelete queue) 
             False -- no-wait; true means no answer from server
-            (FieldTable (M.fromList []))))
+            (maybe (FieldTable $ M.fromList []) id (queueHeaders queue))))
     
     return (qName, fromIntegral messageCount, fromIntegral consumerCount)
 
