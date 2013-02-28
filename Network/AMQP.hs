@@ -57,6 +57,7 @@ module Network.AMQP (
     -- * Channel
     Channel,
     openChannel,
+    closeChannel,
     
     -- * Exchanges
     ExchangeOpts(..),
@@ -882,7 +883,16 @@ closeChannel' c reason = do
             F.mapM_ (\x -> tryPutMVar x $ error "channel closed") val
             return undefined
 
-   
+closeChannel :: Channel -> IO ()
+closeChannel chan = do
+  (SimpleMethod Connection_close_ok) <- request chan $ (SimpleMethod (Channel_close
+        0 -- reply_code
+        (ShortString "") -- reply_text
+        0 -- class_id
+        0 -- method_id
+        ))
+  _ <- closeChannel' chan ""
+  return ()
     
    
 -- | opens a new channel on the connection     
@@ -914,8 +924,6 @@ openChannel c = do
     return newChannel        
 
   
-
-
 -- | writes multiple frames to the channel atomically
 writeFrames :: Channel -> [FramePayload] -> IO ()
 writeFrames chan payloads = 
