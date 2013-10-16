@@ -1,53 +1,53 @@
-{-# OPTIONS -XBangPatterns #-}
-module Network.AMQP.Types
-    (Octet,
-     Bit,
-     ChannelID,
-     PayloadSize,
-     ShortInt,
-     LongInt,
-     LongLongInt,
-     ShortString(..),
-     LongString(..),
-     Timestamp,
-     FieldTable(..),
-     FieldValue(..),
-     Decimals,
-     DecimalValue(..)
-     )
-     where
+{-# LANGUAGE BangPatterns #-}
+-- |
+--
+-- This module contains data-types specified in the AMQP spec
+module Network.AMQP.Types (
+    Octet,
+    Bit,
+    ChannelID,
+    PayloadSize,
+    ShortInt,
+    LongInt,
+    LongLongInt,
+    ShortString(..),
+    LongString(..),
+    Timestamp,
+    FieldTable(..),
+    FieldValue(..),
+    Decimals,
+    DecimalValue(..)
+) where
 
-
+import Control.Applicative
 import Data.Int
-import Data.Char
 import Data.Binary
 import Data.Binary.Get
-import Data.Binary.Put
-import Control.Applicative
-import qualified Data.ByteString.Char8 as BS
-import qualified Data.ByteString.Lazy.Char8 as BL
-import qualified Data.ByteString.Lazy.Internal as BL
-import qualified Data.Binary.Put as BPut
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
-import Control.Monad
-import qualified Data.Map as M
 import Data.Binary.IEEE754
+import Data.Binary.Put
+import Data.Char
+import Data.Text (Text)
 
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.Map as M
+import qualified Data.Text.Encoding as T
 
 -- performs runGet on a bytestring until the string is empty
-readMany :: (Show t, Binary t) => BL.ByteString -> [t]
-readMany str = runGet (readMany' [] 0) str
+readMany :: (Show a, Binary a) => BL.ByteString -> [a]
+readMany = runGet (readMany' [] 0)
+
+readMany' :: (Show a, Binary a) => [a] -> Int -> Get [a]
 readMany' _ 1000 = error "readMany overflow"
 readMany' acc overflow = do
     x <- get
-    rem <- remaining
-    if rem > 0 
+    emp <- isEmpty
+    if not emp
         then readMany' (x:acc) (overflow+1)
         else return (x:acc)
-        
-putMany x = mapM_ put x
+
+putMany :: Binary a => [a] -> PutM ()
+putMany = mapM_ put
 
 -- Lowlevel Types
 type Octet = Word8
@@ -60,15 +60,14 @@ type ShortInt = Word16
 type LongInt = Word32
 type LongLongInt = Word64
 
-
-
 newtype ShortString = ShortString Text
-    deriving (Show, Ord, Eq)
+    deriving (Eq, Ord, Read, Show)
 instance Binary ShortString where
     get = do
       len <- getWord8
       dat <- getByteString (fromIntegral len)
       return $ ShortString $ T.decodeUtf8 dat
+
     put (ShortString x) = do
         let s = T.encodeUtf8 x
         if BS.length s > 255
@@ -76,47 +75,41 @@ instance Binary ShortString where
             else do
                 putWord8 $ fromIntegral (BS.length s)
                 putByteString s
-    
-newtype LongString = LongString Text
-    deriving Show
+
+newtype LongString = LongString BS.ByteString
+    deriving (Eq, Ord, Read, Show)
 instance Binary LongString where
     get = do
       len <- getWord32be
       dat <- getByteString (fromIntegral len)
-      return $ LongString $ T.decodeUtf8 dat
+      return $ LongString dat
+
     put (LongString x) = do
-        let s = T.encodeUtf8 x
-        putWord32be $ fromIntegral (BS.length s)
-        putByteString s
+        putWord32be $ fromIntegral (BS.length x)
+        putByteString x
 
 type Timestamp = Word64
-
-
 
 --- field-table ---
 
 -- | Keys must be shorter than 256 bytes when encoded as UTF-8
 data FieldTable = FieldTable (M.Map Text FieldValue)
-    deriving Show
+    deriving (Eq, Ord, Read, Show)
 instance Binary FieldTable where
     get = do
         len <- get :: Get LongInt --length of fieldValuePairs in bytes
-        
-        if len > 0 
+        if len > 0
             then do
                 fvp <- getLazyByteString (fromIntegral len)
                 let !fields = readMany fvp
-                
                 return $ FieldTable $ M.fromList $ map (\(ShortString a, b) -> (a,b)) fields
             else return $ FieldTable $ M.empty
-                
+
     put (FieldTable fvp) = do
         let bytes = runPut (putMany $ map (\(a,b) -> (ShortString a, b)) $ M.toList fvp) :: BL.ByteString
         put ((fromIntegral $ BL.length bytes):: LongInt)
         putLazyByteString bytes
-    
 
-    
 --- field-value ---
 
 data FieldValue = FVBool Bool
@@ -133,8 +126,8 @@ data FieldValue = FVBool Bool
                 | FVFieldTable FieldTable
                 | FVVoid
                 | FVByteArray BS.ByteString
-    deriving Show
-                
+    deriving (Eq, Ord, Read, Show)
+
 instance Binary FieldValue where
     get = do
         fieldType <- getWord8
@@ -147,12 +140,12 @@ instance Binary FieldValue where
             'f' -> FVFloat <$> getFloat32be
             'd' -> FVDouble <$> getFloat64be
             'D' -> FVDecimal <$> get
-            'S' -> do 
+            'S' -> do
                 LongString x <- get :: Get LongString
-                return $ FVString x
+                return $ FVString $ T.decodeUtf8 x
             'A' -> do
-                len <- get :: Get Int32 
-                if len > 0 
+                len <- get :: Get Int32
+                if len > 0
                     then do
                         fvp <- getLazyByteString (fromIntegral len)
                         let !fields = readMany fvp
@@ -164,6 +157,7 @@ instance Binary FieldValue where
             'x' -> do
                 len <- get :: Get Word32
                 FVByteArray <$> getByteString (fromIntegral len)
+            c   -> error ("Unknown field type: " ++ show c)
 
     put (FVBool x) = put 't' >> put x
     put (FVInt8 x) = put 'b' >> put x
@@ -173,10 +167,10 @@ instance Binary FieldValue where
     put (FVFloat x) = put 'f' >> putFloat32be x
     put (FVDouble x) = put 'd' >> putFloat64be x
     put (FVDecimal x) = put 'D' >> put x
-    put (FVString x) = put 'S' >> put (LongString x)
+    put (FVString x) = put 'S' >> put (LongString $ T.encodeUtf8 x)
     put (FVFieldArray x) = do
         put 'A'
-        if length x == 0 
+        if length x == 0
             then put (0 :: Int32)
             else do
                 let bytes = runPut (putMany x) :: BL.ByteString
@@ -190,18 +184,15 @@ instance Binary FieldValue where
         let len = fromIntegral (BS.length x) :: Word32
         put len
         putByteString x
-    
-    
-data DecimalValue = DecimalValue Decimals LongInt    
-    deriving Show
-instance Binary DecimalValue where   
+
+data DecimalValue = DecimalValue Decimals LongInt
+    deriving (Eq, Ord, Read, Show)
+instance Binary DecimalValue where
     get = do
       a <- getWord8
       b <- get :: Get LongInt
       return $ DecimalValue a b
+
     put (DecimalValue a b) = put a >> put b
-    
-type Decimals = Octet       
 
-
-
+type Decimals = Octet
